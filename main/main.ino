@@ -68,6 +68,17 @@ const int   TURN_MAXPWM = 100;     // low cap = slow approach = no overshoot
 const float TURN_TOL    = 3.0f;    // deg resting band; well inside +/-5 deg mark
 const float FLOOR_BAND  = 2.5f;    // apply MINPWM floor only when err > this
 
+// --- Wall-distance controller (Task 3.2) ------------------------------------
+const float WALL_SETPOINT_MM = 100.0f;
+const float WALL_TOL_MM      = 3.5f;   // rest band, inside the +/-5mm mark
+const float KP_WALL          = 1.2f;   // PWM per mm of error; tune
+const float KP_WALL_HEADING = 3.0f;   // gentler than KP_HEADING for slow driving
+const int   WALL_MINPWM      = 25;     // stiction floor
+const int   WALL_MAXPWM      = 90;     // low cap = gentle approach
+const float LIDAR_OFFSET_MM  = 5.0f;   // sensor face vs robot front; verify
+
+const float CELL_SIZE_CM = 20.0f;   // 200mm cells. for task 3.4
+
 void resetEncoders() {
     encoder1.count = 0;
     encoder2.count = 0;
@@ -79,12 +90,10 @@ float wheelDist(mtrn3100::Encoder& enc) {
 
 // Drive forward `distance_cm`, holding the CURRENT global bearing (captured at
 // call time) using the IMU. Does NOT reset the frame.
+float target_bearing = 0.0f;        // absolute bearing, multiples of 90 deg
+
 void driveStraight(float distance_cm) {
     resetEncoders();
-
-    updateHeading();
-    float target_bearing = heading_deg;   // hold whatever bearing we start at
-
     while (true) {
         updateHeading();
 
@@ -147,16 +156,84 @@ void holdHeading(float target_deg, uint32_t hold_ms) {
     spinInPlace(0);
 }
 
-// ---------------------------------------------------------------------------
-//  RECOVER TO ZERO
-//  Drives the robot back to heading 0 (the initial frame direction) and holds
-//  there for hold_ms. Use this after picking the robot up and rotating it to
-//  an arbitrary angle -- it will rotate back to the original heading. Because
-//  the error is wrapped, it always takes the shortest path regardless of how
-//  far it was rotated by hand.
-// ---------------------------------------------------------------------------
-void recoverToZero(uint32_t hold_ms) {
-    holdHeading(0.0f, hold_ms);
+// Median-of-3 rejects single-reading spikes from the VL6180X, which are the
+// main driver of twitching near the setpoint.
+float readFrontFiltered() {
+    uint8_t a = lidar.readFront();
+    uint8_t b = lidar.readFront();
+    uint8_t c = lidar.readFront();
+    uint8_t m = (a > b) ? ((b > c) ? b : ((a > c) ? c : a))
+                        : ((a > c) ? a : ((b > c) ? c : b));
+    return (float)m - LIDAR_OFFSET_MM;
+}
+
+// Hold the front of the robot at setpoint_mm from the wall. Covers all three
+// challenges of Task 3.2 in one continuous call: the wall moving just changes
+// the error, and the controller follows it.
+void holdWallDistance(float setpoint_mm, uint32_t hold_ms) {
+    uint32_t start = millis();
+
+    updateHeading();
+    float wall_bearing = heading_deg;   // hold the bearing we start at
+
+    while (millis() - start < hold_ms) {
+        updateHeading();
+
+        float dist = readFrontFiltered();
+        float err  = dist - setpoint_mm;
+
+        Serial.print("dist "); Serial.print(dist);
+        Serial.print("  err "); Serial.println(err);
+
+        // Heading correction, same as driveStraight.
+        float yaw_err = wrapDeg(wall_bearing - heading_deg);
+        float corr = constrain(KP_WALL_HEADING * yaw_err, -MAX_CORR, MAX_CORR);
+
+        if (fabs(err) < WALL_TOL_MM) {
+            motor1.setPWM(0);
+            motor2.setPWM(0);
+            continue;
+        }
+
+         int cmd = (int)(KP_WALL * err);
+        if (fabs(err) > 6.0f) {
+            if (cmd > 0 && cmd < WALL_MINPWM)  cmd = WALL_MINPWM;
+            if (cmd < 0 && cmd > -WALL_MINPWM) cmd = -WALL_MINPWM;
+        }
+        cmd = constrain(cmd, -WALL_MAXPWM, WALL_MAXPWM);
+
+        // Same structure as driveStraight: forward drive plus heading trim.
+        motor1.setPWM(-(cmd - (int)corr));
+        motor2.setPWM( (cmd + (int)corr));
+    }
+    motor1.setPWM(0);
+    motor2.setPWM(0);
+}
+
+// --- Task 3.4: chaining movements -------------------------------------------
+// Execute one command character.
+void doMove(char c) {
+    switch (c) {
+        case 'f':
+            driveStraight(CELL_SIZE_CM);
+            break;
+        case 'l':                        // left = CCW = positive yaw
+            target_bearing = wrapDeg(target_bearing + 90.0f);
+            holdHeading(target_bearing, 3000);
+            break;
+        case 'r':                        // right = CW = negative yaw
+            target_bearing = wrapDeg(target_bearing - 90.0f);
+            holdHeading(target_bearing, 3000);
+            break;
+    }
+}
+
+// Run a full command string, e.g. "lfrfflfr".
+void runSequence(const char* seq) {
+    for (uint8_t i = 0; seq[i] != '\0'; i++) {
+        doMove(seq[i]);
+        delay(200);                      // brief settle between moves
+    }
 }
 
 void setup() {
@@ -173,17 +250,24 @@ void setup() {
     updateHeading();      // heading_deg now 0 = initial frame
 
     // ---- TASK 3.1: drive 1 metre straight ----
-    // driveStraight(100.0f);
+    //driveStraight(100.0f);
+
+     // ---- TASK 3.2: drive and stop ----
+    //holdWallDistance(WALL_SETPOINT_MM, 600000);
 
     // ---- TASK 3.3: turning to an absolute -90 deg bearing ----
-    holdHeading(-90.0f, 1000);
-    delay(5000);          // <-- lift & rotate the robot during this window
-    recoverToZero(4000);  // rotates back to the initial heading (0)
+    //holdHeading(-90.0f, 60000);
+    
+
+    //TASK3.4 CONTINOUS OPERATION 
+     runSequence("lfrfflfr");   // replace with the string given on the day
 }
 
 // Keeps heading_deg live and prints it. Read heading_deg anywhere in your code.
 void loop() {
-    updateHeading();
-    Serial.print("heading: "); Serial.println(heading_deg);
-    delay(100);
+    //Serial.println(lidar.readFront());
+    //delay(100);    
+    //updateHeading();
+    //Serial.print("heading: "); Serial.println(heading_deg);
+    //delay(100);
 }
