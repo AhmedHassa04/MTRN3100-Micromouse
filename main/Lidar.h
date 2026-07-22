@@ -71,7 +71,7 @@ private:
         s.setAddress(addr);             // move off 0x29 so the next won't clash
         s.setTimeout(250);
         // Continuous mode is faster for control loops, but single-shot is
-        // simpler and plenty for these low-speed tasks.
+        // simpler and plenty for these low-speed tasks.d
     }
 };
 
