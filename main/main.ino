@@ -57,7 +57,7 @@ float wrapDeg(float a) {
 
 // --- Straight-line heading controller (IMU-based, per Task 3.1 tip) ---------
 const float KP_HEADING = 10.0f;   // tune; flip sign if it steers the wrong way
-const int   BASE_PWM   = 160;
+const int   BASE_PWM   = 120;
 const int   MAX_CORR   = 80;
 
 // --- Turning controller (Task 3.3, IMU closed-loop, pure P + speed cap) -----
@@ -65,7 +65,7 @@ const int   MAX_CORR   = 80;
 const float KP_TURN     = 1.5f;    // proportional gain
 const int   TURN_MINPWM = 30;      // min PWM to break stiction (sign-preserving)
 const int   TURN_MAXPWM = 100;     // low cap = slow approach = no overshoot
-const float TURN_TOL    = 3.0f;    // deg resting band; well inside +/-5 deg mark
+const float TURN_TOL    = 1.5f;    // deg resting band; well inside +/-5 deg mark
 const float FLOOR_BAND  = 2.5f;    // apply MINPWM floor only when err > this
 
 // --- Wall-distance controller (Task 3.2) ------------------------------------
@@ -77,7 +77,7 @@ const int   WALL_MINPWM      = 25;     // stiction floor
 const int   WALL_MAXPWM      = 90;     // low cap = gentle approach
 const float LIDAR_OFFSET_MM  = 5.0f;   // sensor face vs robot front; verify
 
-const float CELL_SIZE_CM = 20.0f;   // 200mm cells. for task 3.4
+const float CELL_SIZE_CM = 17.5f;   // 200mm cells. for task 3.4
 
 void resetEncoders() {
     encoder1.count = 0;
@@ -151,6 +151,26 @@ void holdHeading(float target_deg, uint32_t hold_ms) {
         }
         cmd = constrain(cmd, -TURN_MAXPWM, TURN_MAXPWM);
 
+        spinInPlace(cmd);
+    }
+    spinInPlace(0);
+}
+
+void turnBy(float delta_deg) {
+    updateHeading();
+    float target = wrapDeg(heading_deg + delta_deg);
+
+    while (true) {
+        updateHeading();
+        float err = wrapDeg(target - heading_deg);
+        if (fabs(err) < TURN_TOL) break;
+
+        int cmd = (int)(KP_TURN * err);
+        if (fabs(err) > FLOOR_BAND) {
+            if (cmd > 0 && cmd < TURN_MINPWM)  cmd = TURN_MINPWM;
+            if (cmd < 0 && cmd > -TURN_MINPWM) cmd = -TURN_MINPWM;
+        }
+        cmd = constrain(cmd, -TURN_MAXPWM, TURN_MAXPWM);
         spinInPlace(cmd);
     }
     spinInPlace(0);
@@ -256,11 +276,20 @@ void setup() {
     //holdWallDistance(WALL_SETPOINT_MM, 600000);
 
     // ---- TASK 3.3: turning to an absolute -90 deg bearing ----
-    //holdHeading(-90.0f, 60000);
+    turnBy(-90.0f);
+
+    uint32_t t = millis();
+    while (millis() - t < 5000) {
+        updateHeading();
+        Serial.print("heading (waiting): "); Serial.println(heading_deg);
+    }
+
+
+    holdHeading(-90.0f, 60000);
     
 
     //TASK3.4 CONTINOUS OPERATION 
-     runSequence("lfrfflfr");   // replace with the string given on the day
+     //runSequence("lfrfrflf");   // replace with the string given on the day
 }
 
 // Keeps heading_deg live and prints it. Read heading_deg anywhere in your code.
