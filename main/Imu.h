@@ -21,14 +21,14 @@ class IMU {
 public:
     static constexpr uint8_t MPU_ADDR = 0x68;   // ADO low
     // MPU6050 gyro sensitivity at +/-250 dps range = 131 LSB/(deg/s)
-    static constexpr float GYRO_LSB_PER_DPS = 131.0f;
+    static constexpr float GYRO_LSB_PER_DPS = 65.5f;
 
     void begin() {
         // Wake device (clear sleep bit in PWR_MGMT_1)
         writeReg(0x6B, 0x00);
         delay(10);
-        // Gyro config: +/-250 dps (FS_SEL=0)
-        writeReg(0x1B, 0x00);
+        // Gyro config: +/-500 dps (FS_SEL=0)
+        writeReg(0x1B, 0x08);
         // DLPF ~44Hz to reduce noise (CONFIG reg 0x1A = 3)
         writeReg(0x1A, 0x03);
         delay(10);
